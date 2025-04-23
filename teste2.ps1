@@ -72,7 +72,7 @@ $labelIPStatus.Size = New-Object Drawing.Size(540, 20)
 $labelIPStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
 $labelIPInput = New-Object Windows.Forms.Label
-$labelIPInput.Text = "Digite o IP base (ex: 192.168.1):"
+$labelIPInput.Text = "Digite o gateway (ex: 192.168.1):"
 $labelIPInput.Location = New-Object Drawing.Point(20, 100)
 $labelIPInput.AutoSize = $true
 
@@ -108,7 +108,7 @@ function Get-Files {
 function Listar-IPs {
     $ipBase = $inputIP.Text.Trim()
     if (-not ($ipBase -match '^\d{1,3}\.\d{1,3}\.\d{1,3}$')) {
-        [System.Windows.Forms.MessageBox]::Show("Digite um IP base válido no formato: 192.168.1")
+        [System.Windows.Forms.MessageBox]::Show("Digite um gateway base válido no formato: 192.168.1")
         return
     }
 
@@ -122,6 +122,16 @@ function Listar-IPs {
     $progressBarIPs.Maximum = 254
     $progressBarIPs.Value = 0
 
+    # Carrega a lista de fabricantes do GitHub (uma vez só)
+    if (-not $global:macVendorList) {
+        try {
+            $global:macVendorList = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/suportekl/kldownloads/refs/heads/main/manufacturer.json" -TimeoutSec 5
+        } catch {
+            $global:macVendorList = @()
+        }
+    }
+
+    # Verifica o gateway
     $gateway = (Get-NetRoute -DestinationPrefix "0.0.0.0/0").NextHop
     if ($gateway) {
         try {
@@ -129,11 +139,19 @@ function Listar-IPs {
             if ($arpInfo -match "$gateway\s+([-\w]+)") {
                 $mac = $matches[1]
                 $macClean = $mac -replace '-', ':'
-                try {
-                    $vendor = Invoke-RestMethod -Uri "https://api.macvendors.com/$macClean" -TimeoutSec 3
-                } catch {
-                    $vendor = "Desconhecido"
+                $macPrefix = ($macClean -replace ':', '')[0..5] -join ''
+                $vendorInfo = $global:macVendorList | Where-Object { $_.Assignment -eq $macPrefix.ToUpper() }
+
+                if ($vendorInfo) {
+                    $vendor = $vendorInfo."Organization Name"
+                } else {
+                    try {
+                        $vendor = Invoke-RestMethod -Uri "https://api.macvendors.com/$macClean" -TimeoutSec 3
+                    } catch {
+                        $vendor = "Desconhecido"
+                    }
                 }
+
                 $ipsList += ("{0,-18} {1,-20} {2}" -f $gateway, $mac, $vendor) + "`r`n"
             }
         } catch {
@@ -143,6 +161,7 @@ function Listar-IPs {
         [System.Windows.Forms.Application]::DoEvents()
     }
 
+    # Varredura dos IPs
     for ($i = 1; $i -le 254; $i++) {
         $ip = "$ipBase.$i"
         $progressBarIPs.Value = $i
@@ -157,16 +176,25 @@ function Listar-IPs {
                         if ($_ -match "$ip\s+([-\w]+)") {
                             $mac = $matches[1]
                             $macClean = $mac -replace '-', ':'
-                            try {
-                                $vendor = Invoke-RestMethod -Uri "https://api.macvendors.com/$macClean" -TimeoutSec 3
-                            } catch {
-                                $vendor = "Desconhecido"
+                            $macPrefix = ($macClean -replace ':', '')[0..5] -join ''
+                            $vendorInfo = $global:macVendorList | Where-Object { $_.Assignment -eq $macPrefix.ToUpper() }
+
+                            if ($vendorInfo) {
+                                $vendor = $vendorInfo."Organization Name"
+                            } else {
+                                try {
+                                    $vendor = Invoke-RestMethod -Uri "https://api.macvendors.com/$macClean" -TimeoutSec 3
+                                } catch {
+                                    $vendor = "Desconhecido"
+                                }
                             }
+
                             $ipsList += ("{0,-18} {1,-20} {2}" -f $ip, $mac, $vendor) + "`r`n"
                         }
                     }
                 }
             } catch {
+                # ignora erros de ping
             }
         }
     }
@@ -175,6 +203,7 @@ function Listar-IPs {
     $labelIPStatus.Text = "Dispositivos encontrados:"
     $txtIPs.Text = $ipsList
 }
+
 
 $btnDownloadPage.Add_Click({
     $listBox.Items.Clear()
@@ -211,7 +240,7 @@ $btnIPsPage.Add_Click({
     $inputIP.Visible = $true
     $btnIniciarVarredura.Visible = $true
 
-    $txtIPs.Text = "Digite o IP base (ex: 192.168.1) e clique em Iniciar Varredura"
+    $txtIPs.Text = "Digite o gateway base (ex: 192.168.1) e clique em Iniciar Varredura"
     $labelIPStatus.Text = "Aguardando entrada do usuário..."
 })
 
