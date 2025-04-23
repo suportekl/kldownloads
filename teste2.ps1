@@ -8,7 +8,6 @@ if (-not (Test-Path $pastaDestino)) {
     New-Item -ItemType Directory -Path $pastaDestino -Force | Out-Null
 }
 
-# Janela principal
 $form = New-Object Windows.Forms.Form
 $form.Text = "📦 KL-Quartz Downloader"
 $form.Size = New-Object Drawing.Size(600, 550)
@@ -29,7 +28,6 @@ function Novo-Botao($texto, $x, $y) {
     return $btn
 }
 
-# Botões
 $btnDownloadPage = Novo-Botao "Lista de Downloads" 20 20
 $btnIPsPage = Novo-Botao "Listar IP's" 180 20
 $btnIniciarVarredura = Novo-Botao "Iniciar Varredura" 340 20
@@ -37,7 +35,6 @@ $btnDownload = Novo-Botao "⬇ Baixar Arquivo" 20 450
 $btnOpen = Novo-Botao "Abrir Pasta" 200 450
 $btnSair = Novo-Botao "❌ Sair" 380 450
 
-# Lista de arquivos
 $listBox = New-Object Windows.Forms.ListBox
 $listBox.Location = New-Object Drawing.Point(20, 60)
 $listBox.Size = New-Object Drawing.Size(540, 250)
@@ -51,7 +48,6 @@ $progressBar.Size = New-Object Drawing.Size(540, 20)
 $progressBar.Style = "Continuous"
 $form.Controls.Add($progressBar)
 
-# Tela de IPs
 $labelIPs = New-Object Windows.Forms.Label
 $labelIPs.Text = "Lista de IPs e MACs"
 $labelIPs.AutoSize = $true
@@ -75,7 +71,6 @@ $labelIPStatus.Location = New-Object Drawing.Point(20, 380)
 $labelIPStatus.Size = New-Object Drawing.Size(540, 20)
 $labelIPStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
-# Input de IP
 $labelIPInput = New-Object Windows.Forms.Label
 $labelIPInput.Text = "Digite o IP base (ex: 192.168.1):"
 $labelIPInput.Location = New-Object Drawing.Point(20, 100)
@@ -89,7 +84,6 @@ $btnIniciarVarredura.Location = New-Object Drawing.Point(420, 95)
 $btnIniciarVarredura.Size = New-Object Drawing.Size(140, 30)
 
 $form.Controls.AddRange(@($labelIPs, $txtIPs, $progressBarIPs, $labelIPStatus, $labelIPInput, $inputIP, $btnIniciarVarredura))
-
 
 function Get-Files {
     try {
@@ -128,7 +122,6 @@ function Listar-IPs {
     $progressBarIPs.Maximum = 254
     $progressBarIPs.Value = 0
 
-    # Primeiro verifica o gateway
     $gateway = (Get-NetRoute -DestinationPrefix "0.0.0.0/0").NextHop
     if ($gateway) {
         try {
@@ -150,17 +143,15 @@ function Listar-IPs {
         [System.Windows.Forms.Application]::DoEvents()
     }
 
-    # Verifica outros IPs com método compatível
     for ($i = 1; $i -le 254; $i++) {
         $ip = "$ipBase.$i"
         $progressBarIPs.Value = $i
         [System.Windows.Forms.Application]::DoEvents()
 
         if ($ip -ne $gateway) {
-            # Método alternativo compatível com todas versões do PowerShell
             $ping = New-Object System.Net.NetworkInformation.Ping
             try {
-                $reply = $ping.Send($ip, 1000) # Timeout de 1000ms (1 segundo)
+                $reply = $ping.Send($ip, 1000)
                 if ($reply.Status -eq 'Success') {
                     arp -a $ip | ForEach-Object {
                         if ($_ -match "$ip\s+([-\w]+)") {
@@ -176,7 +167,6 @@ function Listar-IPs {
                     }
                 }
             } catch {
-                # Ignora erros de ping
             }
         }
     }
@@ -188,8 +178,8 @@ function Listar-IPs {
 
 $btnDownloadPage.Add_Click({
     $listBox.Items.Clear()
-    $arquivos = Get-Files
-    $arquivos | ForEach-Object { $listBox.Items.Add($_.Nome) }
+    $global:arquivos = Get-Files
+    $global:arquivos | ForEach-Object { $listBox.Items.Add($_.Nome) }
 
     $listBox.Visible = $true
     $progressBar.Visible = $true
@@ -220,7 +210,7 @@ $btnIPsPage.Add_Click({
     $labelIPInput.Visible = $true
     $inputIP.Visible = $true
     $btnIniciarVarredura.Visible = $true
-    
+
     $txtIPs.Text = "Digite o IP base (ex: 192.168.1) e clique em Iniciar Varredura"
     $labelIPStatus.Text = "Aguardando entrada do usuário..."
 })
@@ -234,36 +224,68 @@ $btnDownload.Add_Click({
         $nome = $listBox.SelectedItem
         $arquivo = $arquivos | Where-Object { $_.Nome -eq $nome }
         if ($arquivo) {
-            $caminho = Join-Path $pastaDestino $arquivo.Nome
+            # 🔽 Corrige a extensão do arquivo, mesmo que o nome esteja sem
+            $extensao = [System.IO.Path]::GetExtension($arquivo.href)
+            $nomeComExtensao = if ($arquivo.Nome -notmatch "\.[a-z0-9]{2,4}$") {
+                "$($arquivo.Nome)$extensao"
+            } else {
+                $arquivo.Nome
+            }
+
+            $caminho = Join-Path $pastaDestino $nomeComExtensao
+
             try {
-                $response = Invoke-WebRequest -Uri $arquivo.href -Method Head -UseBasicParsing
-                $totalBytes = [int]$response.Headers["Content-Length"]
-                $progressBar.Maximum = $totalBytes
+                $progressBar.Style = "Marquee"
+                $progressBar.MarqueeAnimationSpeed = 50
+                $form.Refresh()
 
                 $client = New-Object System.Net.WebClient
-                $client.add_DownloadProgressChanged({
-                    param($sender, $e)
-                    $progressBar.Value = $e.BytesReceived
+                $global:downloadComplete = $false
+
+                $client.Add_DownloadProgressChanged({
+                    param($s, $e)
+                    if ($progressBar.Style -ne "Continuous") {
+                        $progressBar.Style = "Continuous"
+                    }
+                    $progressBar.Value = $e.ProgressPercentage
+                    $form.Refresh()
                 })
 
-                $client.DownloadFileAsync($arquivo.href, $caminho)
-                while ($client.IsBusy) { Start-Sleep -Seconds 1 }
+                $client.Add_DownloadFileCompleted({
+                    param($s, $e)
+                    $global:downloadComplete = $true
+                    if ($e.Error) {
+                        [System.Windows.Forms.MessageBox]::Show("Erro no download: $($e.Error.Message)", "Erro", "OK", "Error")
+                    } else {
+                        [System.Windows.Forms.MessageBox]::Show("Download concluído para: $caminho", "Sucesso", "OK", "Information")
+                    }
+                    $client.Dispose()
+                })
 
-                [System.Windows.Forms.MessageBox]::Show("Download concluído para: $caminho", "Sucesso", "OK", "Information")
+                $client.DownloadFileAsync([Uri]$arquivo.href, $caminho)
+
+                while (-not $global:downloadComplete) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 100
+                }
+
             } catch {
-                [System.Windows.Forms.MessageBox]::Show("Erro ao baixar: $_")
+                [System.Windows.Forms.MessageBox]::Show("Erro ao baixar: $_", "Erro", "OK", "Error")
+            } finally {
+                $progressBar.Style = "Continuous"
+                $progressBar.Value = 0
             }
         }
     } else {
-        [System.Windows.Forms.MessageBox]::Show("Selecione um arquivo.")
+        [System.Windows.Forms.MessageBox]::Show("Selecione um arquivo antes de baixar.", "Aviso", "OK", "Warning")
     }
 })
+
 
 $btnOpen.Add_Click({ Start-Process explorer.exe $pastaDestino })
 $btnSair.Add_Click({ $form.Close() })
 
 $form.Controls.AddRange(@($btnDownloadPage, $btnIPsPage, $btnIniciarVarredura, $btnDownload, $btnOpen, $btnSair))
 
-# Exibir a janela
 $form.Topmost = $true
 $form.ShowDialog()
